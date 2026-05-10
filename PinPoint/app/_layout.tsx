@@ -3,7 +3,7 @@ import { Stack, router, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect, useState } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -56,11 +56,22 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
+      <View style={{ flex: 1, backgroundColor: Platform.OS === 'web' ? '#f0f0f0' : '#FFF', alignItems: 'center' }}>
+        <View style={{ 
+          flex: 1, 
+          width: '100%', 
+          maxWidth: Platform.OS === 'web' ? 480 : '100%',
+          backgroundColor: '#FFF',
+          boxShadow: Platform.OS === 'web' ? '0px 0px 20px rgba(0,0,0,0.1)' : undefined,
+          overflow: 'hidden'
+        }}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          </Stack>
+        </View>
+      </View>
       <StatusBar style="auto" />
     </ThemeProvider>
   );

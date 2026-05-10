@@ -19,7 +19,10 @@ export default function TabLayout() {
           borderRadius: 32,
           height: 64,
           borderCurve: 'continuous',
-          boxShadow: '0 8px 32px rgba(138, 125, 255, 0.15)',
+          shadowColor: '#8A7DFF',
+          shadowOffset: { width: 0, height: 8 },
+          shadowOpacity: 0.15,
+          shadowRadius: 24,
           borderTopWidth: 0,
           elevation: 8,
           paddingBottom: 0, // Override default padding

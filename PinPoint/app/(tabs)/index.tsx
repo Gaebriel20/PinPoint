@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, SafeAreaView, Platform, ActivityIndicator, Modal } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ScrollView, SafeAreaView, Platform, ActivityIndicator, Modal, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../../lib/supabase';
 import { useFocusEffect } from 'expo-router';
-import { useAudioRecorder, useAudioRecorderState, RecordingPresets, requestRecordingPermissionsAsync } from 'expo-audio';
+import { useAudioRecorder, useAudioRecorderState, RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 
 type Note = {
   id: string;
@@ -50,6 +50,17 @@ export default function LandingPage() {
   useFocusEffect(
     useCallback(() => {
       fetchNotes();
+
+      const subscription = supabase
+        .channel('public:notes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notes' }, () => {
+          fetchNotes();
+        })
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(subscription);
+      };
     }, [])
   );
 
@@ -62,6 +73,12 @@ export default function LandingPage() {
 
       try {
         const formData = new FormData();
+
+        if (!recorder.uri) {
+          alert('Recording failed: No audio URI found.');
+          setIsTranscribing(false);
+          return;
+        }
 
         if (Platform.OS === 'web') {
           const fetchResponse = await fetch(recorder.uri);
@@ -96,13 +113,24 @@ export default function LandingPage() {
       }
       setIsTranscribing(false);
     } else {
-      const { granted } = await requestRecordingPermissionsAsync();
-      if (!granted) {
-        alert('Microphone permission required to use speech-to-text.');
-        return;
+      try {
+        const { granted } = await requestRecordingPermissionsAsync();
+        if (!granted) {
+          alert('Microphone permission required to use speech-to-text.');
+          return;
+        }
+        
+        // Ensure iOS allows recording
+        if (Platform.OS === 'ios') {
+          await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        }
+
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+      } catch (err: any) {
+        console.error("Recording start error:", err);
+        alert('Failed to start microphone: ' + err.message);
       }
-      await recorder.prepareToRecordAsync();
-      recorder.record();
     }
   };
 
@@ -136,8 +164,52 @@ export default function LandingPage() {
       setNotes([data, ...notes]);
       setTitle('');
       setSubject('');
+
+      // Automatically generate quiz in the background
+      (async () => {
+        try {
+          const { data: result, error: invokeError } = await supabase.functions.invoke('generate-quiz', {
+            body: { content: data.content }
+          });
+          
+          if (!invokeError && result.questions) {
+            await supabase
+              .from('quizzes')
+              .insert([{ note_id: data.id, generated_questions: result.questions }]);
+          }
+        } catch (e) {
+          console.error('Auto quiz generation failed:', e);
+        }
+      })();
     }
     setIsSubmitting(false);
+  };
+
+  const executeDelete = async (noteId: string) => {
+    try {
+      const { error } = await supabase.from('notes').delete().eq('id', noteId);
+      if (error) throw error;
+      setNotes(notes.filter(n => n.id !== noteId));
+    } catch (e: any) {
+      alert('Error deleting note: ' + e.message);
+    }
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    if (Platform.OS === 'web') {
+      if (window.confirm("Are you sure you want to delete this note and its associated quizzes?")) {
+        executeDelete(noteId);
+      }
+    } else {
+      Alert.alert(
+        "Delete Note",
+        "Are you sure you want to delete this note and its associated quizzes?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: () => executeDelete(noteId) }
+        ]
+      );
+    }
   };
 
   const isInputDisabled = recorderState.isRecording || isTranscribing || isSubmitting;
@@ -225,7 +297,12 @@ export default function LandingPage() {
           <View style={styles.notesList}>
             {notes.map(note => (
               <TouchableOpacity key={note.id} style={styles.noteCard} onPress={() => setSelectedNote(note)}>
-                <Text style={styles.noteTitle}>{note.title}</Text>
+                <View style={styles.noteHeader}>
+                  <Text style={styles.noteTitle} numberOfLines={1}>{note.title}</Text>
+                  <TouchableOpacity onPress={() => handleDeleteNote(note.id)} style={styles.deleteButton}>
+                    <Ionicons name="trash-outline" size={20} color="#FF4B4B" />
+                  </TouchableOpacity>
+                </View>
                 <Text style={styles.notePreview} numberOfLines={2}>{note.content}</Text>
               </TouchableOpacity>
             ))}
@@ -293,7 +370,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
     justifyContent: 'center',
     alignItems: 'center',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 2,
   },
   inputSection: {
     marginBottom: 24,
@@ -307,7 +388,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#333',
     marginBottom: 16,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.04)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
   },
   subjectContainer: {
     backgroundColor: '#FFF',
@@ -315,7 +400,11 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     padding: 18,
     minHeight: 140,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.04)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
@@ -364,7 +453,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 40,
-    boxShadow: '0 6px 16px rgba(0, 0, 0, 0.05)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    elevation: 4,
   },
   addButtonDisabled: {
     backgroundColor: '#F9F9F9',
@@ -403,13 +496,28 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderCurve: 'continuous',
     padding: 24,
-    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.04)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  noteHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 8,
   },
   noteTitle: {
+    flex: 1,
     fontSize: 17,
     fontWeight: '700',
     color: '#1A1A1A',
-    marginBottom: 8,
+    marginRight: 12,
+  },
+  deleteButton: {
+    padding: 2,
+    marginLeft: 8,
   },
   notePreview: {
     fontSize: 15,
@@ -428,7 +536,11 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     height: '85%',
     padding: 24,
-    boxShadow: '0 -4px 24px rgba(0,0,0,0.1)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 24,
+    elevation: 10,
   },
   modalHeader: {
     flexDirection: 'row',
